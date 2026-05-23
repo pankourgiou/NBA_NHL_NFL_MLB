@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>t-SNE Player Stat Embeddings</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; justify-content: center; padding: 2rem; }
+    .container { background: white; border-radius: 12px; padding: 2rem; max-width: 860px; width: 100%; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+    h1 { font-size: 1.2rem; font-weight: 500; margin: 0 0 0.25rem; color: #222; }
+    p.sub { font-size: 0.85rem; color: #888; margin: 0 0 1.25rem; }
+    .legend { display: flex; gap: 1.25rem; flex-wrap: wrap; margin-bottom: 1rem; font-size: 13px; color: #555; }
+    .legend span { display: flex; align-items: center; gap: 6px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .chart-wrap { position: relative; width: 100%; height: 460px; }
+    .footer { font-size: 12px; color: #aaa; text-align: center; margin-top: 0.75rem; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>t-SimCNE (approximate with t-SNE) — Player Stat Embeddings</h1>
+  <p class="sub">Proximity indicates statistical similarity across sports.</p>
+  <div class="legend">
+    <span><span class="dot" style="background:#E24B4A"></span>NBA</span>
+    <span><span class="dot" style="background:#378ADD"></span>NHL</span>
+    <span><span class="dot" style="background:#639922"></span>MLB</span>
+    <span><span class="dot" style="background:#7F77DD"></span>NFL</span>
+  </div>
+  <div class="chart-wrap">
+    <canvas id="tsneChart" role="img" aria-label="Scatter plot of t-SNE player stat embeddings for NBA, NHL, MLB, and NFL"></canvas>
+  </div>
+  <p class="footer">Dim 1 / Dim 2 — t-SNE with perplexity 30, 300 iterations</p>
+</div>
+
+<script>
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function hashSeed(s){let h=0;for(let i=0;i<s.length;i++){h=(Math.imul(31,h)+s.charCodeAt(i))|0;}return Math.abs(h)%10000;}
+function normal(rng,mean,std){const u1=rng(),u2=rng();return mean+Math.sqrt(-2*Math.log(u1+1e-10))*Math.cos(2*Math.PI*u2)*std;}
+
+function generateSport(sport,n){
+  const rng=mulberry32(hashSeed(sport));
+  return Array.from({length:n},()=>{
+    const v=Array(17).fill(0);
+    if(sport==='NBA'){v[0]=normal(rng,15,5);v[1]=normal(rng,5,2);v[2]=normal(rng,7,3);v[3]=normal(rng,1,0.5);v[4]=normal(rng,1.5,0.6);}
+    else if(sport==='NHL'){v[5]=normal(rng,20,10);v[1]=normal(rng,30,12);v[6]=normal(rng,80,25);v[3]=normal(rng,40,15);}
+    else if(sport==='MLB'){v[7]=normal(rng,20,10);v[8]=normal(rng,70,30);v[9]=normal(rng,130,20);v[10]=normal(rng,15,10);}
+    else{v[11]=normal(rng,10,5);v[12]=normal(rng,800,200);v[13]=normal(rng,5,2);v[14]=normal(rng,50,15);}
+    return v;
+  });
+}
+
+function standardize(data){
+  const cols=data[0].length;
+  const means=Array(cols).fill(0),stds=Array(cols).fill(0);
+  for(const r of data)for(let j=0;j<cols;j++)means[j]+=r[j];
+  for(let j=0;j<cols;j++)means[j]/=data.length;
+  for(const r of data)for(let j=0;j<cols;j++)stds[j]+=(r[j]-means[j])**2;
+  for(let j=0;j<cols;j++)stds[j]=Math.sqrt(stds[j]/data.length)||1;
+  return data.map(r=>r.map((v,j)=>(v-means[j])/stds[j]));
+}
+
+function tsne(X,{perplexity=30,iter=300,lr=100,seed=42}={}){
+  const n=X.length,dim=X[0].length;
+  const rng=mulberry32(seed);
+  const d2=(a,b)=>{let s=0;for(let k=0;k<dim;k++)s+=(a[k]-b[k])**2;return s;};
+  const D=Array.from({length:n},(_,i)=>Array.from({length:n},(_,j)=>d2(X[i],X[j])));
+  const P=Array.from({length:n},()=>Array(n).fill(0));
+  for(let i=0;i<n;i++){
+    let lo=0,hi=1e10,beta=1;
+    for(let t=0;t<30;t++){
+      let sum=0;const pw=[];
+      for(let j=0;j<n;j++){if(i===j){pw.push(0);continue;}const v=Math.exp(-D[i][j]*beta);pw.push(v);sum+=v;}
+      let H=0;for(let j=0;j<n;j++){if(!pw[j])continue;H-=(pw[j]/sum)*Math.log(pw[j]/sum+1e-10);}
+      const diff=H-Math.log2(perplexity);
+      if(Math.abs(diff)<1e-4)break;
+      if(diff>0){lo=beta;beta=hi<1e9?(beta+hi)/2:beta*2;}else{hi=beta;beta=(beta+lo)/2;}
+    }
+    let s=0;for(let j=0;j<n;j++)s+=P[i][j];
+    for(let j=0;j<n;j++)P[i][j]/=(s||1);
+  }
+  const Psym=Array.from({length:n},(_,i)=>Array.from({length:n},(_,j)=>(P[i][j]+P[j][i])/(2*n)));
+  let Y=Array.from({length:n},()=>[rng()*0.01-0.005,rng()*0.01-0.005]);
+  let gains=Array.from({length:n},()=>[1,1]),vel=Array.from({length:n},()=>[0,0]);
+  for(let t=0;t<iter;t++){
+    const mom=t<250?0.5:0.8;
+    const dY=Array.from({length:n},()=>[0,0]);
+    for(let i=0;i<n;i++)for(let j=0;j<n;j++){
+      if(i===j)continue;
+      const dq=(Y[i][0]-Y[j][0])**2+(Y[i][1]-Y[j][1])**2;
+      const q=1/(1+dq);
+      const fac=(Psym[i][j]-q*q)*q*4;
+      dY[i][0]+=fac*(Y[i][0]-Y[j][0]);
+      dY[i][1]+=fac*(Y[i][1]-Y[j][1]);
+    }
+    for(let i=0;i<n;i++)for(let d=0;d<2;d++){
+      gains[i][d]=Math.max(0.01,(dY[i][d]*vel[i][d]<0)?gains[i][d]+0.2:gains[i][d]*0.8);
+      vel[i][d]=mom*vel[i][d]-lr*gains[i][d]*dY[i][d];
+      Y[i][d]+=vel[i][d];
+    }
+  }
+  return Y;
+}
+
+const N=100;
+const all=[...generateSport('NBA',N),...generateSport('NHL',N),...generateSport('MLB',N),...generateSport('NFL',N)];
+const emb=tsne(standardize(all),{perplexity:30,iter:300,lr:100,seed:42});
+const pts=start=>emb.slice(start,start+N).map(p=>({x:+p[0].toFixed(2),y:+p[1].toFixed(2)}));
+
+new Chart(document.getElementById('tsneChart'),{
+  type:'scatter',
+  data:{datasets:[
+    {label:'NBA',data:pts(0),backgroundColor:'rgba(226,75,74,0.75)',pointRadius:5,pointHoverRadius:7},
+    {label:'NHL',data:pts(N),backgroundColor:'rgba(55,138,221,0.75)',pointRadius:5,pointHoverRadius:7},
+    {label:'MLB',data:pts(N*2),backgroundColor:'rgba(99,153,34,0.75)',pointRadius:5,pointHoverRadius:7},
+    {label:'NFL',data:pts(N*3),backgroundColor:'rgba(127,119,221,0.75)',pointRadius:5,pointHoverRadius:7}
+  ]},
+  options:{
+    responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label} (${ctx.parsed.x.toFixed(1)}, ${ctx.parsed.y.toFixed(1)})`}}},
+    scales:{
+      x:{title:{display:true,text:'Dim 1'},grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11}}},
+      y:{title:{display:true,text:'Dim 2'},grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11}}}
+    }
+  }
+});
+</script>
+</body>
+</html>
